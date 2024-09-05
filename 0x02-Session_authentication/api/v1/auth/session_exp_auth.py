@@ -1,25 +1,31 @@
 #!/usr/bin/env python3
 """
-SessionDBAuth class to manage API authentication
+SessionExpAuth class to manage API authentication
 """
-from api.v1.auth.session_exp_auth import SessionExpAuth
-from models.user_session import UserSession
+from api.v1.auth.session_auth import SessionAuth
 from os import getenv
 from datetime import datetime, timedelta
 
 
-class SessionDBAuth(SessionExpAuth):
+class SessionExpAuth(SessionAuth):
     """SessionExpAuth class to manage API authentication
     """
+
+    def __init__(self):
+        """Initialize SessionExpAuth
+        """
+        try:
+            self.session_duration = int(getenv('SESSION_DURATION'))
+        except Exception:
+            self.session_duration = 0
 
     def create_session(self, user_id=None):
         """Create session
         """
-        if user_id:
-            session_id = super().create_session(user_id)
-            us = UserSession(user_id=user_id, session_id=session_id)
-            us.save()
-            UserSession.save_to_file()
+        session_id = super().create_session(user_id)
+        if session_id:
+            SessionAuth.user_id_by_session_id[session_id] = {
+                'user_id': user_id, 'created_at': datetime.now()}
             return session_id
 
     def user_id_for_session_id(self, session_id=None):
@@ -27,26 +33,14 @@ class SessionDBAuth(SessionExpAuth):
         """
         if not session_id:
             return None
-        UserSession.load_from_file()
-        users = UserSession.search({'session_id': session_id})
-        for u in users:
-            delta = timedelta(seconds=self.session_duration)
-            if u.created_at + delta < datetime.now():
-                return None
-            return u.user_id
-
-    def destroy_session(self, request=None):
-        """Delete the user session / log out
-        """
-        if request:
-            session_id = self.session_cookie(request)
-            if not session_id:
-                return False
-            if not self.user_id_for_session_id(session_id):
-                return False
-            users = UserSession.search({'session_id': session_id})
-            for u in users:
-                u.remove()
-                UserSession.save_to_file()
-                return True
-        return False
+        session_dict = SessionExpAuth.user_id_by_session_id.get(session_id)
+        if not session_dict:
+            return None
+        if self.session_duration <= 0:
+            return session_dict['user_id']
+        if 'created_at' not in session_dict:
+            return None
+        delta = timedelta(seconds=self.session_duration)
+        if session_dict['created_at'] + delta < datetime.now():
+            return None
+        return session_dict['user_id']
