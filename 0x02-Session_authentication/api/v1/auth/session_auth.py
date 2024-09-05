@@ -1,42 +1,72 @@
 #!/usr/bin/env python3
-""" SessionAuth class to manage API authentication """
+"""
+Route module for the API
+"""
+from os import getenv
+from api.v1.views import app_views
+from flask import Flask, jsonify, abort, request
+from flask_cors import (CORS, cross_origin)
 
 
-from api.v1.auth.auth import Auth
-from models.user import User
-import uuid
+app = Flask(__name__)
+app.config['JSONIFY_PRETTYPRINT_REGULAR'] = True
+app.register_blueprint(app_views)
+CORS(app, resources={r"/api/v1/*": {"origins": "*"}})
+auth = None
+if getenv('AUTH_TYPE') == 'auth':
+    from api.v1.auth.auth import Auth
+    auth = Auth()
+elif getenv('AUTH_TYPE') == 'basic_auth':
+    from api.v1.auth.basic_auth import BasicAuth
+    auth = BasicAuth()
+elif getenv('AUTH_TYPE') == 'session_auth':
+    from api.v1.auth.session_auth import SessionAuth
+    auth = SessionAuth()
+elif getenv('AUTH_TYPE') == 'session_exp_auth':
+    from api.v1.auth.session_exp_auth import SessionExpAuth
+    auth = SessionExpAuth()
+elif getenv('AUTH_TYPE') == 'session_db_auth':
+    from api.v1.auth.session_db_auth import SessionDBAuth
+    auth = SessionDBAuth()
 
 
-class SessionAuth (Auth):
-    """ SessionAuth class to manage API authentication """
-    user_id_by_session_id = {}
+@app.errorhandler(404)
+def not_found(error) -> str:
+    """ Not found handler
+    """
+    return jsonify({"error": "Not found"}), 404
 
-    def create_session(self, user_id: str = None) -> str:
-        """ create a Session ID for a user_id """
-        if isinstance(user_id, str):
-            session_id = str(uuid.uuid4())
-            SessionAuth.user_id_by_session_id[session_id] = user_id
-            return session_id
 
-    def user_id_for_session_id(self, session_id: str = None) -> str:
-        """ session id """
-        if isinstance(session_id, str):
-            return SessionAuth.user_id_by_session_id.get(session_id)
+@app.errorhandler(401)
+def unauthorized(error) -> str:
+    """ Request unauthorized
+    """
+    return jsonify({"error": "Unauthorized"}), 401
 
-    def current_user(self, request=None):
-        """Return a User instance based on a cookie value
-        """
-        return User.get(
-            self.user_id_for_session_id(self.session_cookie(request)))
 
-    def destroy_session(self, request=None):
-        """Delete the user session / log out
-        """
-        if request:
-            session_id = self.session_cookie(request)
-            if not session_id:
-                return False
-            if not self.user_id_for_session_id(session_id):
-                return False
-            self.user_id_by_session_id.pop(session_id)
-            return True
+@app.errorhandler(403)
+def forbidden(error) -> str:
+    """ Request forbidden
+    """
+    return jsonify({"error": "Forbidden"}), 403
+
+
+@app.before_request
+def before_request():
+    """ Before request
+    """
+    excluded_paths = ['/api/v1/status/', '/api/v1/unauthorized/',
+                      '/api/v1/forbidden/', '/api/v1/auth_session/login/']
+    if auth and auth.require_auth(request.path, excluded_paths):
+        if (not auth.authorization_header(request) and
+                not auth.session_cookie(request)):
+            abort(401)
+        if not auth.current_user(request):
+            abort(403)
+        request.current_user = auth.current_user(request)
+
+
+if __name__ == "__main__":
+    host = getenv("API_HOST", "0.0.0.0")
+    port = getenv("API_PORT", "5000")
+    app.run(host=host, port=port)
